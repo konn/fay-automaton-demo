@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Automaton Demo</title>
+    <style type="text/css">h1, form, p { margin: 10px; clear: both; }fieldset { width: 660px; }#inspectors { width: 200px; float: right;}canvas { float: left; margin: 10px; }#state-inspector, #trans-inspector { width: 150px; height: 292px; margin: 10px;}#state-name, #trans-info-from, #trans-info-to, #trans-info-inputs { width: 30pt; }</style>
+    <script src="http://code.jquery.com/jquery-latest.js"></script>
+    <script src="Automaton.js"></script>
+  </head>
+  <body style="margin:0;padding:0">
+    <h1>Automaton Demo</h1>
+    <div><div id="canvas-frame"><canvas style="border:solid 1px" width="500" height="300" id="canvas"></canvas></div>
+	<fieldset id="state-inspector">
+	  <legend>State Info</legend>
+	  <label for="state-name">Name: </label><input id="state-name" type="text" value="0" /><br />
+	  <label for="is-initial">Initial: </label><input id="is-initial" type="checkbox" value="0" /><br />
+	  <label for="is-accepts">Accepts: </label><input id="is-accepts" type="checkbox" value="0" /><br />
+	  <button  id="delete-state" type="button">Delete</button>
+        </fieldset>
+	<fieldset id="trans-inspector">
+	  <legend>Transition Info</legend>
+	  <label for="trans-info-from">From: </label><input id="trans-info-from" type="text" value="0" /><br />
+	  <label for="trans-info-inputs">Input: </label><input id="trans-info-inputs" type="text" value="0" /><br />
+	  <label for="trans-info-to">To: </label><input id="trans-info-to" type="text" value="0" /><br />
+	  <button  id="delete-trans" type="button">Delete</button><button id="update-trans">Update</button>
+        </fieldset>
+    </div>
+    <p>
+      <form id="edit">
+	<fieldset>
+	  <legend>Create</legend>
+  	  <button  id="new-state" type="button">New State</button><br />
+	  <hr />
+  	  <label for="trans-form">From:</label>
+	  <input size="5" id="trans-from" type="text"></input>
+	  <label for="trans-input">Input:</label>
+	  <input size="5" id="trans-input" type="text"></input>
+	  <label for="trans-to">To:</label>
+	  <input size="5" id="trans-to" type="text"></input>
+	  <button  id="new-trans" type="button">New Transition</button>
+	</fieldset>
+      </form>
+      <form id="execution">
+	<fieldset>
+	  <legend>Execution</legend>
+	  <input id="ainput" type="text" value="01101" />
+	  <button id="run" type="button">Run</button>
+	  <button id="stop" type="button">Stop</button>
+	  <button id="clear" type="button">Clear</button>
+	</fieldset>
+      </form>
+    </p>
+  </body>
+</html>
