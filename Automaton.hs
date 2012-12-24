@@ -596,13 +596,13 @@ defAutomatonState :: AutomatonState
 defAutomatonState =
     AutomatonState { automaton = Automaton { transs = [ Trans 0 '0' 0, Trans 0 '1' 1
                                                       , Trans 1 '0' 2, Trans 1 '1' 3
-                                                      , Trans 2 '0' 4, Trans 2 'a' 5
+                                                      , Trans 2 '0' 4, Trans 2 '1' 5
                                                       , Trans 3 '0' 0, Trans 3 '1' 1
                                                       , Trans 4 '0' 2, Trans 4 '1' 3
                                                       , Trans 5 '0' 4, Trans 5 '1' 5
                                                       ]
                                            , initial = 0, accepts = [0] }
-                   , stateMap = [                (1, (200, 40)), (2, (300, 40))
+                   , stateMap = [                 (1, (200, 40)), (2, (300, 40))
                                 , (0, (30, 230)), (3, (160, 230)), (4,(338, 230)), (5, (470, 230))
                                 ]
                    , stateCount = 2
