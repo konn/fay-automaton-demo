@@ -275,20 +275,6 @@ setMouseState mps mState = do
   ps <- readRef mps
   writeRef mps ps{ mouseState = mState }
 
-getTransShape :: AutomatonState -> Trans -> Maybe TransShape
-getTransShape AutomatonState{..} Trans{transFrom = src, transTo = targ} =
-  case (lookup src stateMap, lookup targ stateMap) of
-    (Just p0@(x, y), Just p1@(x', y')) ->
-      if p0 == p1
-      then Just (Arc p0)
-      else let theta = if x <= x' then atan ((y-y') / (x-x')) else pi + atan ((y-y') / (x-x'))
-      in if any (\t -> transFrom t == targ && transTo t == src) (transs automaton)
-      then Just $ Line (p0 %+ stateRadius %* angle (theta + pi/8))
-                       (p1 %- stateRadius %* angle (theta - pi/8))
-      else Just $ Line (p0 %+ stateRadius %* angle theta)
-                       ( p1 %- stateRadius %* angle theta)
-    _ -> Nothing
-
 deleteObject :: Ref AutomatonState -> Context -> Event -> Fay Bool
 deleteObject mps cxt _ = do
   AutomatonState{..} <- readRef mps
@@ -447,6 +433,20 @@ getTransAt as@AutomatonState{automaton} (atX, atY) = filter isOn $ transs automa
                     && (y == y' || min y y' - atY <= 5 && atY <= max y y')
         Just (Arc (x, y)) -> abs (stateRadius - distance (x, y + stateRadius) (atX, atY)) <= 5
                              && y + stateRadius / sqrt 2 <= atY
+
+getTransShape :: AutomatonState -> Trans -> Maybe TransShape
+getTransShape AutomatonState{..} Trans{transFrom = src, transTo = targ} =
+  case (lookup src stateMap, lookup targ stateMap) of
+    (Just p0@(x, y), Just p1@(x', y')) ->
+      if p0 == p1
+      then Just (Arc p0)
+      else let theta = if x <= x' then atan ((y-y') / (x-x')) else pi + atan ((y-y') / (x-x'))
+      in if any (\t -> transFrom t == targ && transTo t == src) (transs automaton)
+      then Just $ Line (p0 %+ stateRadius %* angle (theta + pi/8))
+                       (p1 %- stateRadius %* angle (theta - pi/8))
+      else Just $ Line (p0 %+ stateRadius %* angle theta)
+                       ( p1 %- stateRadius %* angle theta)
+    _ -> Nothing
 
 --------------------------------------------------------------
 -- Rendering
