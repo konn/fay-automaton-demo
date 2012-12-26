@@ -2,13 +2,27 @@
 <html>
   <head>
     <title>Automaton Demo</title>
-    <style type="text/css">h1, form, p { margin: 10px; clear: both; }fieldset { width: 660px; }#inspectors { width: 200px; float: right;}canvas { float: left; margin: 10px; }#state-inspector, #trans-inspector { width: 150px; height: 292px; margin: 10px;}#state-name, #trans-info-from, #trans-info-to, #trans-info-inputs { width: 30pt; }</style>
+    <style type="text/css">h1, form, p { margin: 10px; clear: both; }fieldset { width: 660px; }#inspectors { width: 200px; float: right;}canvas { float: left; margin: 10px; }#state-inspector, #trans-inspector { width: 150px; height: 292px; margin: 10px;}#state-name, #trans-info-from, #trans-info-to, #trans-info-inputs { width: 30pt; }.notice{color:green;}.warning{color:red;}</style>
     <script src="http://code.jquery.com/jquery-latest.js"></script>
     <script src="Automaton.js"></script>
   </head>
   <body style="margin:0;padding:0">
     <h1>Automaton Demo</h1>
-    <div><div id="canvas-frame"><canvas style="border:solid 1px" width="500" height="300" id="canvas"></canvas></div>
+    <div><div id="canvas-frame">
+	<form>
+	  <input type="radio" name="mode" id="dfa" checked="checked" value="DFA" />
+	  <label for="dfa">DFA</label>
+	  <input type="radio" name="mode" id="nfa" value="NFA" />
+	  <label for="nfa">NFA</label>
+	  <label for="layout">Layout:</label>
+	  <select id="layout">
+	    <option value="rect">Rect</option>
+	    <option value="circle">Circle</option>
+	    <option value="circle-origin">Circle+Origin</option>
+	  </select>
+	  <button type="button" id="rearrange">Rearrange</button>
+	</form>
+	<canvas style="border:solid 1px" width="500" height="500" id="canvas"></canvas></div>
 	<fieldset id="state-inspector">
 	  <legend>State Info</legend>
 	  <label for="state-name">Name: </label><input id="state-name" type="text" value="0" /><br />
@@ -25,6 +39,15 @@
         </fieldset>
     </div>
     <p>
+      <p>Message: <span id="message"></span></p>
+      <form id="execution">
+	<fieldset>
+	  <legend>Execution</legend>
+	  <input id="ainput" type="text" value="01101" />
+	  <button id="run" type="button">Run</button>
+	  <button id="stop" type="button">Stop</button>
+	  <button id="clear" type="button">Clear</button>
+	</fieldset>
       <form id="edit">
 	<fieldset>
 	  <legend>Create</legend>
@@ -39,14 +62,14 @@
 	  <button  id="new-trans" type="button">New Transition</button>
 	</fieldset>
       </form>
-      <form id="execution">
+      <form id="load">
 	<fieldset>
-	  <legend>Execution</legend>
-	  <input id="ainput" type="text" value="01101" />
-	  <button id="run" type="button">Run</button>
-	  <button id="stop" type="button">Stop</button>
-	  <button id="clear" type="button">Clear</button>
+	  <legend>Load Regular expression</legend>
+  	  <label for="regex">Regex:</label>
+	  <input size="100" id="regex" type="text" value="(0|1)*"></input>
+	  <button id="parse" type="button">Parse</button><br />
 	</fieldset>
+      </form>
       </form>
     </p>
   </body>

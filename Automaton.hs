@@ -4,23 +4,29 @@
 module Automaton (main) where
 import Language.Fay.FFI
 import Language.Fay.Prelude
+
+import DataTypes
 import MyPrelude
 
 --------------------------------------------------------------
 -- Main
 --------------------------------------------------------------
-
 main :: Fay ()
-main = addWindowEventListener "load" run
-
-run :: Event -> Fay Bool
-run _ = do
+main = ready $ do
   -- set up canvas
   canvas <- jQuery "canvas"
   cxt <- flip getContext "2d" =<< getIndex canvas 0
   mps <- newRef defAutomatonState
   renderAutomaton cxt mps
-  bind canvas "mousedown" (onMouseDown mps cxt)
+
+  bind document "keydown" $ \event -> do
+    AutomatonState {mouseState} <- readRef mps
+    xs <- selectAll "input:focus"
+    if null xs && keyCode event == 8 && mouseState /= Idle
+      then deleteObject mps cxt event
+      else return True
+
+  bind' canvas "mousedown" (onMouseDown mps cxt)
   bind canvas "mousemove" (onMouseMove mps cxt)
   bind canvas "mouseup"   (onMouseUp mps cxt)
   bind canvas "mouseleave" (onMouseOutLeave mps cxt)
@@ -30,15 +36,76 @@ run _ = do
   initializeInspectors mps cxt
 
   -- set up edit system
+  modeSel <- jQuery "input[name='mode']"
+  bind' modeSel "click" $ \_ -> do
+    AutomatonState{automaton} <- readRef mps
+    ans <- getValue =<< jQuery "input[name='mode']:checked"
+    let mode = if ans == "NFA" then NFA else DFA
+    if mode == NFA || isDFA automaton
+      then do
+        ps <- readRef mps
+        writeRef mps ps{mode}
+      else do
+        warning "This automaton can't be DFA."
+        nfa <- jQuery "#nfa"
+        setChecked nfa True
+
   [delS, delT, newS, newT, start, clear] <-
       mapM jQuery ["#delete-state", "#delete-trans", "#new-state", "#new-trans", "#run", "#clear"]
   bind delS "click" (deleteObject mps cxt)
   bind delT "click" (deleteObject mps cxt)
-  bind newS "click" (createState mps cxt)
-  bind newT "click" (createTrans mps cxt)
+  bind' newS "click" (const $ createState mps cxt)
+  bind' newT "click" (const $ createTrans mps cxt)
   bind start "click" (runAutomaton mps cxt)
-  bind clear "click" (\_ -> unsetCurrentState mps >> renderAutomaton cxt mps >> return True)
-  return False
+  bind clear "click" $ \_ -> do
+    unsetCurrentState mps
+    renderAutomaton cxt mps
+    return True
+
+  [regex, parseBtn, layoutOpt, rearrBtn] <- mapM jQuery ["#regex", "#parse", "#layout", "#rearrange"]
+  bind' parseBtn "click" $ \_ -> do
+    src <- getValue regex
+    case parseRegex src of
+      Nothing -> warning "parse error."
+      Just re -> doLayout cxt mps $ reduceStateID $ compileRegex re
+
+  bind' rearrBtn "click" $ \_ -> do
+    --AutomatonState{automaton} <- readRef mps
+    doLayoutAnimated cxt mps -- automaton
+
+doLayoutAnimated :: Context -> Ref AutomatonState -> Fay ()
+doLayoutAnimated cxt mps = do
+  layouter <- getLayoutStyle
+  ast@AutomatonState{stateMap=started, automaton} <- readRef mps
+  count <- newRef 1
+  let begin = sort started
+      end = sort $ stateMap $ layouter automaton
+      animeStep = do
+        cur <- readRef count
+        let t = fromIntegral cur * 0.1
+            dic = zipWith (\(q, a) (_, b) -> (q, t %* b %+ (1-t) %* a)) begin end
+        writeRef mps ast {stateMap = dic}
+        renderAutomaton cxt mps
+        when (cur < 10) $ do
+          writeRef count (cur + 1)
+          setTimeout 20 animeStep
+  animeStep
+  return ()
+
+doLayout :: Context -> Ref AutomatonState -> Automaton -> Fay ()
+doLayout cxt ref auto = do
+    style <- getLayoutStyle 
+    writeRef ref (style auto)
+    renderAutomaton cxt ref
+
+getLayoutStyle :: Fay (Automaton -> AutomatonState)
+getLayoutStyle = do
+  styleName <- getValue =<< jQuery "#layout"
+  return $
+    case styleName of
+      "circle" -> layoutAutomatonCircle False
+      "circle-origin" -> layoutAutomatonCircle True
+      _ -> layoutAutomaton
 
 --------------------------------------------------------------
 -- Initialization
@@ -113,35 +180,39 @@ onMouseOutLeave mps cxt _ = do
   renderAutomaton cxt mps
   return False
 
-createTrans :: Ref AutomatonState -> Context -> Event -> Fay Bool
-createTrans mps cxt _ = do
+createTrans :: Ref AutomatonState -> Context -> Fay ()
+createTrans mps cxt = do
   [from, inps, to] <- mapM (getValue <=< jQuery) ["#trans-from", "#trans-input", "#trans-to"]
   let tFrom = parseInt from
-      tTo    = parseInt to
+      tTo   = parseInt to
   forM_ (filter (`notElem` " \r\n\t,") inps) $ \tAlpha -> do
     as@AutomatonState{..} <- readRef mps
-    if any (\t -> transFrom t == tFrom && transAlphabet t == tAlpha) (transs automaton)
-       then alert "You cannot duplicate same transition condition."
-       else do
-         let t'    = Trans tFrom tAlpha tTo
-             news  = map (\a -> (a , (canvasWidth/2,canvasHeight/2))) $
+    let t' = Trans tFrom tAlpha tTo
+    if not $ mode == DFA && any (\t -> transFrom t == tFrom && transAlphabet t == tAlpha) (transs automaton)
+       then do
+         let news  = map (\a -> (a , (canvasWidth/2,canvasHeight/2))) $
                        filter (`notElem` map fst stateMap) [tFrom, tTo]
              dic'  = news ++ stateMap
-             cnt   = if null news then stateCount else 1 + (maximum $ map fst $ stateMap)
+         mapM_ (tryCreateState mps) [tFrom, tTo]
          writeRef mps as { automaton = automaton { transs = t' : transs automaton }
                          , stateMap = dic'
-                         , stateCount = cnt
                          }
+       else warning "You cannot duplicate same transition condition."
   renderAutomaton cxt mps
-  return False
 
-createState :: Ref AutomatonState -> Context -> Event -> Fay Bool
-createState mps cxt _ = do
-  as@AutomatonState{..} <- readRef mps
-  let q = stateCount
-  writeRef mps as { stateCount = stateCount + 1, stateMap = (q, (canvasWidth / 2, canvasHeight / 2)) : stateMap}
+tryCreateState :: Ref AutomatonState -> State -> Fay ()
+tryCreateState ref q = do
+  as@AutomatonState{stateCount, stateMap} <- readRef ref
+  when (q >= stateCount) $ do
+    writeRef ref as { stateCount = q + 1
+                    , stateMap = (q, (canvasWidth / 2, canvasHeight / 2)) : stateMap
+                    }
+
+createState :: Ref AutomatonState -> Context -> Fay ()
+createState mps cxt = do
+  AutomatonState{stateCount} <- readRef mps
+  tryCreateState mps stateCount
   renderAutomaton cxt mps
-  return False
 
 onMouseUp :: Ref AutomatonState -> Context -> t -> Fay Bool
 onMouseUp mps cxt _ = do
@@ -185,39 +256,42 @@ onMouseMove mps cxt ev = do
   renderAutomaton cxt mps
   return False
 
-onMouseDown :: Ref AutomatonState -> Context -> Event -> Fay Bool
+onMouseDown :: Ref AutomatonState -> Context -> Event -> Fay ()
 onMouseDown rps cxt ev = do
-  ps <- readRef rps
-  pos <- getMousePos ev
-  let state = getStateAt ps pos
-      trans = getTransAt ps pos
-  if not (null trans)
-    then
-      if mouseState ps == TransSelected trans
-      then setMouseIdle rps
-      else setTransSelected trans rps
-    else
-      case state of
-        Just q  ->
-          if mouseState ps == StateSelected q
-          then setMouseIdle rps
-          else setMouseState rps (PointAtState q)
-        Nothing -> setMouseIdle rps
-  renderAutomaton cxt rps
-  return False
+  AutomatonState{activeStates} <- readRef rps
+  when (all (not . isInProgress) activeStates) $ do
+    unsetCurrentState rps
+    mapM_ blur =<< selectAll ":focus"
+    ps <- readRef rps
+    pos <- getMousePos ev
+    let state = getStateAt ps pos
+        trans = getTransAt ps pos
+    if not (null trans)
+      then
+        if mouseState ps == TransSelected trans
+        then setMouseIdle rps
+        else setTransSelected trans rps
+      else
+        case state of
+          Just q  ->
+            if mouseState ps == StateSelected q
+            then setMouseIdle rps
+            else setMouseState rps (PointAtState q)
+          Nothing -> setMouseIdle rps
+    renderAutomaton cxt rps
 
 --------------------------------------------------------------
 -- Queries & Accessors
 --------------------------------------------------------------
-setCurrentState :: Ref AutomatonState -> State -> Fay ()
-setCurrentState mps q = do
+addCurrentState :: Ref AutomatonState -> State -> Fay ()
+addCurrentState mps q = do
   ps <- readRef mps
-  writeRef mps ps { activeState = StateProgress q }
+  writeRef mps ps { activeStates = StateProgress q : activeStates ps }
 
 unsetCurrentState :: Ref AutomatonState -> Fay ()
 unsetCurrentState mps = do
   ps <- readRef mps
-  writeRef mps ps { activeState = NoActiveState }
+  writeRef mps ps { activeStates = [] }
 
 getSelectedState :: Ref AutomatonState -> Fay (Maybe State)
 getSelectedState asRef = do
@@ -313,6 +387,7 @@ deleteState mps q = do
 
 runAutomaton :: Ref AutomatonState -> Context -> Event -> Fay Bool
 runAutomaton mps cxt _ = do
+  unsetCurrentState mps
   items <- mapM jQuery ["input", "button"]
   stopBtn  <- jQuery "#stop"
   input <- jQuery "#ainput"
@@ -321,40 +396,48 @@ runAutomaton mps cxt _ = do
 
   setMouseIdle mps
   AutomatonState { automaton } <- readRef mps
-  setCurrentState mps (initial automaton)
+  addCurrentState mps (initial automaton)
   refTimer <- newRef Nothing
   renderAutomaton cxt mps
 
   let finalize = do
         maybe (return ()) clearInterval =<< readRef refTimer
-        ap@AutomatonState{activeState} <- readRef mps
-        let final =
-                case activeState of
-                  StateProgress q ->
-                      if q `elem` accepts automaton
-                      then StateAccepted q
-                      else StateRejected q
-                  st -> st
-        writeRef mps ap { activeState = final }
+        ap@AutomatonState{activeStates} <- readRef mps
+        let final = flip map activeStates $ \aq ->
+                      case aq of
+                        StateProgress q ->
+                            if q `elem` accepts automaton
+                            then StateAccepted q
+                            else StateRejected q
+                        st -> st
+        writeRef mps ap { activeStates = final }
+        if any isAccepted final
+           then notice "Accepted!" else warning "rejected!"
         renderAutomaton cxt mps
         mapM_ enable items
 
   string <- newRef =<< getValue input
   -- Running execution thread.
   aTimer <- setInterval 500 $ do
-    ap@AutomatonState {activeState} <- readRef mps
+    ap@AutomatonState {activeStates} <- readRef mps
     curStr <- readRef string
-    case activeState of
-      StateProgress q ->
-        case curStr of
-          [] -> finalize
-          (a:as) -> do
-            writeRef string as
-            case execute automaton q a of
-              Just q' -> setCurrentState mps q' >> renderAutomaton cxt mps
-              Nothing ->
-                writeRef mps ap { activeState = StateRejected q } >> finalize
-      _ -> writeRef mps ap { activeState = NoActiveState } >> finalize
+    if null activeStates
+       then finalize
+       else case curStr of
+              [] -> finalize
+              (a:as) -> do
+                writeRef string as
+                let qs' = nub $ flip concatMap activeStates $ \aq ->
+                            case aq of
+                              StateProgress q ->
+                                let nexts = feedInput automaton q a
+                                in if null nexts then [ StateRejected q ] else map StateProgress nexts
+                              StateRejected _ -> []
+                              StateAccepted q -> [ StateAccepted q ]
+                writeRef mps ap { activeStates = qs' }
+                if all (not . isInProgress) qs'
+                  then finalize
+                  else renderAutomaton cxt mps
     return ()
 
   writeRef refTimer (Just aTimer)
@@ -364,11 +447,14 @@ runAutomaton mps cxt _ = do
 
   return True
 
-execute :: Automaton -> State -> Char -> Maybe State
-execute auto q c =
-  case lookupTrans auto q c of
-    Just t -> Just $ transTo t
-    Nothing -> Nothing
+
+
+isAccepted, isInProgress :: StateKind -> Bool
+isInProgress (StateProgress _) = True
+isInProgress _                 = False
+
+isAccepted (StateAccepted _) = True
+isAccepted _ = False
 
 --------------------------------------------------------------
 -- Geometry
@@ -456,12 +542,15 @@ getTransShape AutomatonState{..} Trans{transFrom = src, transTo = targ} =
 renderAutomaton :: Context -> Ref AutomatonState -> Fay ()
 renderAutomaton cxt rps = do
   ps <- readRef rps
+  if isDFA (automaton ps)
+     then click =<< jQuery "#dfa" else click =<< jQuery "#nfa"
+  ps <- readRef rps
   clearRect cxt (0, 0) (canvasWidth, canvasHeight)
   renderTranss cxt ps
   renderStates cxt ps
 
 renderStates :: Context -> AutomatonState -> Fay ()
-renderStates cxt AutomatonState{mouseState, automaton, stateMap, activeState} = do
+renderStates cxt AutomatonState{mouseState, automaton, stateMap, activeStates} = do
   setLineWidth cxt 1
   setStrokeStyle cxt "black"
   setFillStyle cxt "black"
@@ -490,11 +579,14 @@ renderStates cxt AutomatonState{mouseState, automaton, stateMap, activeState} = 
 
     beginPath cxt
     setFillStyle cxt "rgba(0,0,0,0)"
-    case activeState of
-      StateProgress q -> when (q == state) $ setFillStyle cxt "rgba(0,255,0,0.5)"
-      StateRejected q -> when (q == state) $ setFillStyle cxt "rgba(255,0,0,0.5)"
-      StateAccepted q -> when (q == state) $ setFillStyle cxt "rgba(0,0,255,0.5)"
-      _ -> return ()
+    let colour  = if  StateProgress state `elem` activeStates
+                  then "rgba(0,255,0,0.5)"
+                  else if StateAccepted state `elem` activeStates
+                  then "rgba(0,0,255,0.5)"
+                  else if StateRejected state `elem` activeStates
+                  then "rgba(255,0,0,0.5)"
+                  else "rgba(0,0,0,0)"
+    setFillStyle cxt colour
     kakomi cxt (x, y) stateRadius
     fill cxt
 
@@ -554,8 +646,18 @@ renderTranss cxt as@AutomatonState{mouseState, automaton} = do
         fill cxt
 
   where
-    groupTrans = groupBy (\a b -> transFrom a == transFrom b && transTo a == transTo b)
-                  . sortBy (\a b -> compare (transFrom a, transTo a) (transFrom b, transTo b))
+    groupTrans = step id
+      where
+        step acc []       = acc []
+        step acc zs@(t:_) =
+          let sep = partition (transParallelTo t) zs
+          in step (acc . (fst sep:)) $ snd sep
+
+compareTpl (a, b) (c, d) =
+  case a `compare` c of
+    LT -> LT
+    EQ -> b `compare` d
+    GT -> LT
 
 --------------------------------------------------------------
 -- Constants
@@ -564,7 +666,7 @@ canvasWidth :: Double
 canvasWidth = 500
 
 canvasHeight :: Double
-canvasHeight = 300
+canvasHeight = 500
 
 stateRadius :: Double
 stateRadius = 15
@@ -581,34 +683,69 @@ distance a b = sqrt $ (a %- b) <.> (a %- b)
 data StateKind = StateAccepted State
                | StateRejected State
                | StateProgress State
-               | NoActiveState
                  deriving (Show, Eq)
 instance Foreign StateKind
 
-data AutomatonState = AutomatonState { automaton   :: Automaton
-                                     , stateMap    :: [(State, Point)]
-                                     , stateCount  :: Int
-                                     , mouseState  :: MouseState
-                                     , activeState :: StateKind
+data AutomatonState = AutomatonState { automaton    :: Automaton
+                                     , stateMap     :: [(State, Point)]
+                                     , stateCount   :: Int
+                                     , mouseState   :: MouseState
+                                     , activeStates :: [StateKind]
+                                     , mode         :: Mode
                                      }
                  deriving (Show, Eq)
 
+data Mode = DFA
+          | NFA
+          deriving (Show, Eq)
+
+layoutAutomaton :: Automaton -> AutomatonState
+layoutAutomaton automaton@Automaton{..} =
+  let states = automatonStates automaton
+      stateCount = succ $ maximum $ 0 : states
+      table = zip [0..] $ map (zip [0..]) $ slice 6 states
+      stateMap = concat [ [ (q, (20+i*90, 20+j*90)) | (i, q) <- cands] | (j, cands) <- table ]
+      activeStates = []
+      mode = NFA
+      mouseState = Idle
+  in AutomatonState {..}
+
+layoutAutomatonCircle :: Bool -> Automaton -> AutomatonState
+layoutAutomatonCircle centring automaton@Automaton{..} =
+  let states = automatonStates automaton
+      origin = maximumBy (compare `on` (\a -> length $ filter (\tr -> a `elem` transEndPoints tr) transs)) states
+      stateCount = succ $ maximum $ 0 : states
+      len = if centring then length table - 1 else length table
+      table = zip [0..] (if centring then delete origin states else states)
+      centre = (canvasWidth / 2, canvasHeight / 2)
+      rad = (min canvasWidth canvasHeight) / 2  - 4 * stateRadius
+      stateMap = [ (origin, centre) | centring ] ++ [ (q, centre %+ rad %* angle (2 * fromIntegral i * pi / fromIntegral len)) | (i, q) <- table]
+      activeStates = []
+      mode = NFA
+      mouseState = Idle
+  in AutomatonState {..}
+
+mod6Automaton :: Automaton
+mod6Automaton = Automaton { transs = [ Trans 0 '0' 0, Trans 0 '1' 1
+                                     , Trans 1 '0' 2, Trans 1 '1' 3
+                                     , Trans 2 '0' 4, Trans 2 '1' 5
+                                     , Trans 3 '0' 0, Trans 3 '1' 1
+                                     , Trans 4 '0' 2, Trans 4 '1' 3
+                                     , Trans 5 '0' 4, Trans 5 '1' 5
+                                     ]
+                          , initial = 0, accepts = [0]
+                          }
+
 defAutomatonState :: AutomatonState
 defAutomatonState =
-    AutomatonState { automaton = Automaton { transs = [ Trans 0 '0' 0, Trans 0 '1' 1
-                                                      , Trans 1 '0' 2, Trans 1 '1' 3
-                                                      , Trans 2 '0' 4, Trans 2 '1' 5
-                                                      , Trans 3 '0' 0, Trans 3 '1' 1
-                                                      , Trans 4 '0' 2, Trans 4 '1' 3
-                                                      , Trans 5 '0' 4, Trans 5 '1' 5
-                                                      ]
-                                           , initial = 0, accepts = [0] }
+    AutomatonState { automaton = mod6Automaton
                    , stateMap = [                 (1, (200, 40)), (2, (300, 40))
                                 , (0, (30, 230)), (3, (160, 230)), (4,(338, 230)), (5, (470, 230))
                                 ]
-                   , stateCount = 2
+                   , stateCount = 6
                    , mouseState = Idle
-                   , activeState = NoActiveState
+                   , activeStates = []
+                   , mode = DFA
                    }
 
 instance Foreign AutomatonState
@@ -621,28 +758,6 @@ data MouseState = Idle
                 deriving (Show, Eq)
 
 instance Foreign MouseState
-
-type State   = Int
-
-data Trans = Trans { transFrom     :: State
-                   , transAlphabet :: Char
-                   , transTo       :: State
-                   }
-            deriving (Show, Eq)
-
-transEndPoints :: Trans -> [State]
-transEndPoints tr = [transFrom tr, transTo tr]
-
-data Automaton = Automaton { transs  :: [Trans]
-                           , initial :: State
-                           , accepts :: [State]
-                           }
-             deriving (Show, Eq)
-instance Foreign Automaton
-
-lookupTrans :: Automaton -> State -> Char -> Maybe Trans
-lookupTrans Automaton{transs} q c = find (\t -> transFrom t == q && transAlphabet t == c) transs
-
 
 --------------------------------------------------------------
 -- Mutable reference
@@ -665,6 +780,52 @@ readRef = ffi "Fay$$readRef(%1)"
 --------------------------------------------------------------
 -- jQuery API
 --------------------------------------------------------------
+blur :: Element -> Fay ()
+blur = ffi "%1.blur()"
+
+document :: Element
+document = ffi "jQuery(document)"
+
+keyCode :: Event -> Int
+keyCode = ffi "%1.keyCode"
+
+selectAll :: String -> Fay [Element]
+selectAll = ffi "jQuery(%1)"
+
+click :: Element -> Fay ()
+click = ffi "%1.click()"
+
+setTimeout :: Double -> Fay () -> Fay Timer
+setTimeout = ffi "window.setTimeout(%2, %1)"
+
+setMessage :: String -> String -> Fay ()
+setMessage cls msg = do
+  msgF <- jQuery "#message"
+  resetMessage
+  addClass msgF cls
+  setText msgF msg
+  _ <- setTimeout 2000 resetMessage
+  return ()
+
+notice :: String -> Fay ()
+notice = setMessage "notice"
+
+warning :: String -> Fay ()
+warning = setMessage "warning"
+
+resetMessage :: Fay ()
+resetMessage = do
+  el <- jQuery "#message"
+  setText el ""
+  removeClass el "notice"
+  removeClass el "warning"
+
+addClass :: Element -> String -> Fay ()
+addClass = ffi "%1.addClass(%2)"
+
+removeClass :: Element -> String -> Fay ()
+removeClass = ffi "%1.removeClass(%2)"
+
 arrToStr :: [Char] -> Fay String
 arrToStr = ffi "%1.join('')"
 
@@ -684,8 +845,11 @@ instance Show Element
 data Event
 instance Foreign Event
 
-addWindowEventListener :: String -> (Event -> Fay Bool) -> Fay ()
-addWindowEventListener = ffi "window['addEventListener'](%1,%2,false)"
+ready :: Fay () -> Fay ()
+ready = ffi "jQuery(%1)"
+
+bind' :: Element -> String -> (Event -> Fay ()) -> Fay ()
+bind' = ffi "%1.bind(%2, %3)"
 
 bind :: Element -> String -> (Event -> Fay Bool) -> Fay ()
 bind = ffi "%1.bind(%2, %3)"
