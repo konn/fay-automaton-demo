@@ -62,13 +62,17 @@ main = ready $ do
     renderAutomaton cxt mps
     return True
 
-  [regex, parseBtn, layoutOpt, rearrBtn] <- mapM jQuery ["#regex", "#parse", "#layout", "#rearrange"]
+  [regex, parseBtn, rearrBtn, loadBtn] <- mapM jQuery ["#regex", "#parse", "#rearrange", "#load"]
   bind' parseBtn "click" $ \_ -> do
     src <- getValue regex
     case parseRegex src of
       Nothing -> warning "parse error."
       Just re -> doLayout cxt mps $ reduceStateID $ compileRegex re
 
+
+  bind' loadBtn "click" $ \_ -> do
+    AutomatonState{automaton} <- readRef mps
+    setValue regex =<< arrToStr (prettyRegex $ buildRegex automaton)
   bind' rearrBtn "click" $ \_ -> do
     --AutomatonState{automaton} <- readRef mps
     doLayoutAnimated cxt mps -- automaton
@@ -94,7 +98,7 @@ doLayoutAnimated cxt mps = do
 
 doLayout :: Context -> Ref AutomatonState -> Automaton -> Fay ()
 doLayout cxt ref auto = do
-    style <- getLayoutStyle 
+    style <- getLayoutStyle
     writeRef ref (style auto)
     renderAutomaton cxt ref
 
@@ -400,6 +404,9 @@ runAutomaton mps cxt _ = do
   refTimer <- newRef Nothing
   renderAutomaton cxt mps
 
+  textInput <- getValue input
+  string <- newRef textInput
+
   let finalize = do
         maybe (return ()) clearInterval =<< readRef refTimer
         ap@AutomatonState{activeStates} <- readRef mps
@@ -411,16 +418,17 @@ runAutomaton mps cxt _ = do
                             else StateRejected q
                         st -> st
         writeRef mps ap { activeStates = final }
+        flip setValue textInput =<< jQuery "#ainput"
         if any isAccepted final
            then notice "Accepted!" else warning "rejected!"
         renderAutomaton cxt mps
         mapM_ enable items
 
-  string <- newRef =<< getValue input
   -- Running execution thread.
   aTimer <- setInterval 500 $ do
     ap@AutomatonState {activeStates} <- readRef mps
     curStr <- readRef string
+    setValue input curStr
     if null activeStates
        then finalize
        else case curStr of
@@ -719,22 +727,11 @@ layoutAutomatonCircle centring automaton@Automaton{..} =
       len = length table
       centre = (canvasWidth / 2, canvasHeight / 2)
       rad = (min canvasWidth canvasHeight) / 2  - 4 * stateRadius
-      stateMap = [ (origin, centre) | centring ] ++ [ (q, centre %+ rad %* angle (2 * fromIntegral i * pi / fromIntegral len)) | (i, q) <- table]
+      stateMap = [ (origin, centre) | centring ] ++ [ (q, centre %+ rad %* angle (2 * fromIntegral i * pi / fromIntegral len - pi / 2)) | (i, q) <- table]
       activeStates = []
       mode = NFA
       mouseState = Idle
   in AutomatonState {..}
-
-mod6Automaton :: Automaton
-mod6Automaton = Automaton { transs = [ Trans 0 '0' 0, Trans 0 '1' 1
-                                     , Trans 1 '0' 2, Trans 1 '1' 3
-                                     , Trans 2 '0' 4, Trans 2 '1' 5
-                                     , Trans 3 '0' 0, Trans 3 '1' 1
-                                     , Trans 4 '0' 2, Trans 4 '1' 3
-                                     , Trans 5 '0' 4, Trans 5 '1' 5
-                                     ]
-                          , initial = 0, accepts = [0]
-                          }
 
 defAutomatonState :: AutomatonState
 defAutomatonState =
@@ -758,24 +755,6 @@ data MouseState = Idle
                 deriving (Show, Eq)
 
 instance Foreign MouseState
-
---------------------------------------------------------------
--- Mutable reference
---------------------------------------------------------------
-data Ref a
-instance Foreign a => Foreign (Ref a)
-
--- | Make a new mutable reference.
-newRef :: Foreign a => a -> Fay (Ref a)
-newRef = ffi "new Fay$$Ref(%1)"
-
--- | Replace the value in the mutable reference.
-writeRef :: Foreign a => Ref a -> a -> Fay ()
-writeRef = ffi "Fay$$writeRef(%1,%2)"
-
--- | Get the referred value from the mutable value.
-readRef :: Foreign a => Ref a -> Fay a
-readRef = ffi "Fay$$readRef(%1)"
 
 --------------------------------------------------------------
 -- jQuery API

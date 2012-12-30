@@ -26,6 +26,18 @@ data Trans = Trans { transFrom     :: State
                    }
             deriving (Show, Eq)
 
+mod6Automaton :: Automaton
+mod6Automaton = reduceStateID $ Automaton { transs = [ Trans 0 '0' 0, Trans 0 '1' 1
+                                     , Trans 1 '0' 2, Trans 1 '1' 3
+                                     , Trans 2 '0' 4, Trans 2 '1' 5
+                                     , Trans 3 '0' 0, Trans 3 '1' 1
+                                     , Trans 4 '0' 2, Trans 4 '1' 3
+                                     , Trans 5 '0' 4, Trans 5 '1' 5
+                                     ]
+                          , initial = 0, accepts = [0]
+                          }
+
+
 transEndPoints :: Trans -> [State]
 transEndPoints tr = [transFrom tr, transTo tr]
 
@@ -164,3 +176,151 @@ getSubsetTrans :: Automaton -> [State] -> [(Char, [State])]
 getSubsetTrans auto@Automaton{..} qs =
     let as = automatonAlphabet auto
     in [ (c, sort $ nub $ concat [feedInput auto q c | q <- qs]) | c <- as ]
+
+type Environment s a = s -> (a, s)
+type RegexMemo = [((Int, Int, Int), Regex)]
+
+return_ :: a -> Environment r a
+return_ a s = (a ,s)
+
+get :: Environment r r
+get = \s -> (s,s)
+
+gets :: (r -> a) -> Environment r a
+gets f s = (f s, s)
+
+modify :: (s -> s) -> Environment s ()
+modify f = \s -> ((), f s)
+
+put :: s -> Environment s ()
+put s = \_ -> ((), s)
+
+lookupMemo :: (Int, Int, Int) -> Environment RegexMemo (Maybe Regex)
+lookupMemo ind = gets $ lookup ind
+
+(>>>) :: Environment r a -> Environment r b -> Environment r b
+ma >>> mb = ma >>>= \_ -> mb
+
+(>>>=) :: Environment r a -> (a -> Environment r b) -> Environment r b
+ma >>>= f = \s -> let ans = ma s in uncurry f ans
+
+infixl 1 >>>=
+infixl 1 >>>
+
+update k v dic = insertBy (compare `on` fst) (k,v) $ filter ((/= k) . fst) dic
+
+buildRegex :: Automaton -> Regex
+buildRegex auto' = reduceRegex $ fst $ answer []
+  where
+    auto = reduceStateID auto'
+    states = automatonStates auto
+    maxIndex = maximum states + 1
+    alpha = automatonAlphabet auto
+    trs = transs auto
+    unionM ma mb =
+        ma >>>= \a ->
+        mb >>>= \b ->
+        return_ (Union a b)
+    answer = foldr (unionM . calc maxIndex) (return_ Fail) [(initial auto , q) | q <- accepts auto]
+    calc :: State -> (State, State) -> Environment RegexMemo Regex
+    calc k (i, j) =
+      lookupMemo (k, i, j) >>>= \mans ->
+      case mans of
+        Just ans -> return_ ans
+        Nothing  ->
+          if k == 0
+          then if i == j
+               then let ans = reduceRegex $ foldr Union Eps  [Letter c | c <- alpha, Trans i c i `elem` trs]
+                    in modify (update (k,i,j) ans) >>> return_ ans
+               else let ans = reduceRegex $ foldr Union Fail [Letter c | c <- alpha, Trans i c j `elem` trs]
+                    in modify (update (k,i,j) ans) >>> return_ ans
+          else calc (k-1) (i, j)    >>>= \a ->
+               calc (k-1) (i, k-1)  >>>= \b ->
+               calc (k-1) (k-1,k-1) >>>= \c ->
+               calc (k-1) (k-1, j)  >>>= \d ->
+               let ans = reduceRegex $ Union a (Concat (Concat b (Star c)) d)
+               in modify (update (k,i,j) ans) >>> return_ ans
+
+reduceRegex :: Regex -> Regex
+reduceRegex (Letter c)   = Letter c
+reduceRegex (Star   r)   =
+  case reduceRegex r of
+    Eps -> Eps
+    Union Eps r' -> Star r'
+    Union r' Eps -> Star r'
+    r'           -> Star r'
+reduceRegex Fail         = Fail
+reduceRegex Eps          = Eps
+reduceRegex (Concat a b) =
+  case (reduceRegex a, reduceRegex b) of
+    (Concat r s, Concat t u) -> reduceRegex (Concat (Concat (Concat r s) t) u)
+    (Star re, Union re' Eps) -> if re == re' then Star re else Concat (Star re) (Union re' Eps)
+    (Union re' Eps, Star re) -> if re == re' then Star re else Concat (Union re' Eps) (Star re)
+    (Fail, _) -> Fail
+    (_, Fail) -> Fail
+    (r, Eps)  -> r
+    (Eps, r)  -> r
+    (r, s)    -> Concat r s
+reduceRegex (Union a b) =
+  case (reduceRegex a, reduceRegex b) of
+    (Fail, r)      -> r
+    (r, Fail)      -> r
+    (Star r, Eps)  -> Star r
+    (Eps, Star r)  -> Star r
+    (Eps, r)       -> Union r Eps
+    (r, s)         -> Union r s
+
+prettyRegex :: Regex -> String
+prettyRegex (Letter c)    = [c]
+prettyRegex (Concat a b)  = paren (isUnionRE a) (prettyRegex a) ++ paren (isUnionRE b) (prettyRegex b)
+prettyRegex (Union a Eps) = paren (not $ isLetterRE a) (prettyRegex a) ++ "?"
+prettyRegex (Union Eps a) = paren (not $ isLetterRE a) (prettyRegex a) ++ "?"
+prettyRegex (Union a b)   = prettyRegex a ++ "|" ++ prettyRegex b
+prettyRegex Eps           = ""
+prettyRegex (Star a)      = paren (not $ isLetterRE a) (prettyRegex a) ++ "*"
+prettyRegex Fail          = "/"
+
+isLetterRE :: Regex -> Bool
+isLetterRE (Letter _) = True
+isLetterRE _          = False
+
+isUnionRE :: Regex -> Bool
+isUnionRE (Union _ _) = True
+isUnionRE _          = False
+
+paren True s = "(" ++ s ++ ")"
+paren _    s = s
+
+(!) :: Eq k => [(k, v)] -> k -> v
+dic ! k = fromJust $ lookup k dic
+
+{-
+minimizeDFA dfa =
+  let dic = snd $ loop dic0
+  in renameState (dic !) dfa
+  where
+    trans = transs dfa
+    dic0 =
+      let non = filter (`notElem` accepts dfa) $ automatonStates dfa
+          acc = accepts dfa
+      in map (\a -> (a , minimum non)) non
+                   ++ map (\a -> (a, minimum acc)) acc
+    mkTable dic = transs $ renameState (dic !) dfa
+    loop =
+      get >>>= \dic ->
+      let tbl  = mkTable dic
+          dic' = groupByValue tbl
+      in if (dic /= dic')
+         then put dic' >>> loop
+         else return_ ()
+
+groupByValue dic
+    = if not (null dic)
+      then case minimumBy (compare `on` transFrom) dic of
+             tr@(Trans from a to) ->
+                 let tmp = partition ((\t -> transAlphabet t == a && transTo t == to).snd) (delete tr dic)
+                     d0 = fst tmp
+                     rest = snd tmp
+                 in insertBy compare (from, from) $ nub $ map (const from) d0 ++ groupByValue rest
+      else []
+-}

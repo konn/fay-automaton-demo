@@ -17,6 +17,8 @@ slice len = step id
         case splitAt len xs of
           (ts, rest) -> step (acc . (ts:)) rest
 
+minimumBy cmp = maximumBy (flip cmp)
+
 maximumBy               :: (a -> a -> Ordering) -> [a] -> a
 maximumBy _ []          =  error "List.maximumBy: empty list"
 maximumBy cmp xs        =  foldl1 maxBy xs
@@ -89,3 +91,21 @@ select p x (ts, fs) | p x       = ts `seq` fs `seq` (x:ts,fs)
 
 parseInt :: String -> Int
 parseInt = ffi "parseInt(%1)"
+
+--------------------------------------------------------------
+-- Mutable reference
+--------------------------------------------------------------
+data Ref a
+instance Foreign a => Foreign (Ref a)
+
+-- | Make a new mutable reference.
+newRef :: Foreign a => a -> Fay (Ref a)
+newRef = ffi "new Fay$$Ref(%1)"
+
+-- | Replace the value in the mutable reference.
+writeRef :: Foreign a => Ref a -> a -> Fay ()
+writeRef = ffi "Fay$$writeRef(%1,%2)"
+
+-- | Get the referred value from the mutable value.
+readRef :: Foreign a => Ref a -> Fay a
+readRef = ffi "Fay$$readRef(%1)"
